@@ -4,17 +4,16 @@ RAG Knowledge Assistant — Streamlit GUI
 Theme: "Deep Space" Dark Mode
 Primary Accent: Emerald Green (#50C878)
 Secondary: Slate Gray (#708090)
-Typography: Inter (Google Fonts)
 
 Run with:  streamlit run app.py
 """
 
 import os
+import io
 import time
-import datetime
+import numpy as np
 import streamlit as st
 import PyPDF2
-import chromadb
 from openai import OpenAI
 from sentence_transformers import SentenceTransformer
 
@@ -33,10 +32,7 @@ st.set_page_config(
 # ─────────────────────────────────────────────
 st.markdown("""
 <style>
-/* ── Google Font ── */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
-/* ── Root variables ── */
 :root {
     --emerald: #50C878;
     --emerald-dim: rgba(80,200,120,0.15);
@@ -50,8 +46,6 @@ st.markdown("""
     --text-secondary: #8892A4;
     --radius: 15px;
 }
-
-/* ── Global overrides ── */
 html, body, [data-testid="stAppViewContainer"] {
     background-color: var(--bg-deep) !important;
     color: var(--text-primary) !important;
@@ -62,11 +56,7 @@ html, body, [data-testid="stAppViewContainer"] {
     border-right: 1px solid var(--border-glass) !important;
 }
 [data-testid="stSidebar"] * { color: var(--text-primary) !important; }
-
-/* ── Headers ── */
 h1, h2, h3, h4 { color: var(--text-primary) !important; font-family: 'Inter', sans-serif !important; }
-
-/* ── Buttons with glow ── */
 .stButton > button {
     background: linear-gradient(135deg, #50C878 0%, #3BA55D 100%) !important;
     color: #0B0F19 !important;
@@ -83,8 +73,6 @@ h1, h2, h3, h4 { color: var(--text-primary) !important; font-family: 'Inter', sa
     box-shadow: 0 0 28px rgba(80,200,120,0.55) !important;
 }
 .stButton > button:active { transform: scale(0.97) !important; }
-
-/* ── Inputs ── */
 .stTextInput input, .stTextArea textarea, .stSelectbox > div > div,
 [data-testid="stChatInput"] textarea {
     background-color: rgba(20,26,40,0.8) !important;
@@ -97,24 +85,16 @@ h1, h2, h3, h4 { color: var(--text-primary) !important; font-family: 'Inter', sa
     border-color: var(--emerald) !important;
     box-shadow: 0 0 0 2px rgba(80,200,120,0.2) !important;
 }
-
-/* ── Slider ── */
 .stSlider [data-baseweb="slider"] div[role="slider"] {
     background-color: var(--emerald) !important;
 }
-
-/* ── File uploader ── */
 [data-testid="stFileUploader"] {
     background: var(--bg-glass) !important;
     border: 2px dashed rgba(80,200,120,0.3) !important;
     border-radius: var(--radius) !important;
     padding: 1rem !important;
 }
-[data-testid="stFileUploader"]:hover {
-    border-color: var(--emerald) !important;
-}
-
-/* ── Expander (source attribution) ── */
+[data-testid="stFileUploader"]:hover { border-color: var(--emerald) !important; }
 .streamlit-expanderHeader {
     background: var(--bg-glass) !important;
     border: 1px solid var(--border-glass) !important;
@@ -122,8 +102,6 @@ h1, h2, h3, h4 { color: var(--text-primary) !important; font-family: 'Inter', sa
     color: var(--emerald) !important;
     font-weight: 500 !important;
 }
-
-/* ── Chat message glassmorphism ── */
 [data-testid="stChatMessage"] {
     background: var(--bg-glass) !important;
     backdrop-filter: blur(12px) !important;
@@ -133,8 +111,6 @@ h1, h2, h3, h4 { color: var(--text-primary) !important; font-family: 'Inter', sa
     padding: 1rem 1.2rem !important;
     margin-bottom: 0.8rem !important;
 }
-
-/* ── Metrics ── */
 [data-testid="stMetric"] {
     background: var(--bg-card) !important;
     border: 1px solid var(--border-glass) !important;
@@ -143,13 +119,9 @@ h1, h2, h3, h4 { color: var(--text-primary) !important; font-family: 'Inter', sa
 }
 [data-testid="stMetricValue"] { color: var(--emerald) !important; font-weight: 700 !important; }
 [data-testid="stMetricLabel"] { color: var(--text-secondary) !important; }
-
-/* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(80,200,120,0.25); border-radius: 3px; }
-
-/* ── Glass card utility ── */
 .glass-card {
     background: var(--bg-card);
     backdrop-filter: blur(10px);
@@ -164,8 +136,6 @@ h1, h2, h3, h4 { color: var(--text-primary) !important; font-family: 'Inter', sa
 }
 .status-online { background: #50C878; box-shadow: 0 0 6px #50C878; }
 .status-offline { background: #FF4D4D; box-shadow: 0 0 6px #FF4D4D; }
-
-/* ── Pulse animation for processing ── */
 @keyframes pulse-glow {
     0%, 100% { box-shadow: 0 0 8px rgba(80,200,120,0.3); }
     50% { box-shadow: 0 0 24px rgba(80,200,120,0.7); }
@@ -180,8 +150,6 @@ h1, h2, h3, h4 { color: var(--text-primary) !important; font-family: 'Inter', sa
     font-weight: 500;
     background: var(--bg-glass);
 }
-
-/* ── Hide streamlit branding ── */
 #MainMenu, footer, header { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
@@ -193,13 +161,16 @@ h1, h2, h3, h4 { color: var(--text-primary) !important; font-family: 'Inter', sa
 defaults = {
     "messages": [],
     "indexed_docs": [],
-    "collection": None,
     "embedder": None,
     "llm_client": None,
     "vector_store_ready": False,
     "temperature": 0.3,
     "top_k": 5,
     "total_chunks": 0,
+    # Simple vector store using lists
+    "vs_documents": [],
+    "vs_embeddings": [],
+    "vs_metadatas": [],
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -207,32 +178,21 @@ for k, v in defaults.items():
 
 
 # ─────────────────────────────────────────────
-# CORE RAG FUNCTIONS (from your notebook)
+# CORE FUNCTIONS
 # ─────────────────────────────────────────────
 @st.cache_resource(show_spinner=False)
 def load_embedder():
-    """Load the sentence-transformer model once."""
     return SentenceTransformer("all-MiniLM-L6-v2")
 
 
-@st.cache_resource(show_spinner=False)
-def get_chroma_collection():
-    """Create or get the ChromaDB collection."""
-    client = chromadb.Client()
-    return client.get_or_create_collection(name="football_docs")
-
-
 def get_llm_client():
-    """Initialize the Groq-backed OpenAI client."""
     api_key = st.session_state.get("api_key", "")
     if not api_key:
         return None
     return OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
 
 
-def load_pdf(file_bytes, filename):
-    """Extract text from uploaded PDF bytes."""
-    import io
+def load_pdf(file_bytes):
     text = ""
     reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
     for page in reader.pages:
@@ -243,7 +203,6 @@ def load_pdf(file_bytes, filename):
 
 
 def chunk_text(text, chunk_size=500, overlap=50):
-    """Split text into overlapping chunks."""
     words = text.split()
     chunks = []
     for i in range(0, len(words), chunk_size - overlap):
@@ -254,51 +213,50 @@ def chunk_text(text, chunk_size=500, overlap=50):
 
 
 def index_document(file_bytes, filename):
-    """Index a single uploaded document into ChromaDB."""
+    """Index a document into our simple numpy vector store."""
     embedder = st.session_state.embedder
-    collection = st.session_state.collection
-
-    text = load_pdf(file_bytes, filename)
+    text = load_pdf(file_bytes)
     chunks = chunk_text(text)
-
     if not chunks:
         return 0
 
     embeddings = embedder.encode(chunks).tolist()
-    base_id = len(collection.get()["ids"]) if collection.get()["ids"] else 0
-    ids = [f"chunk_{base_id + i}" for i in range(len(chunks))]
-    metadatas = [{"source": filename, "chunk_index": i} for i in range(len(chunks))]
+    for i, (chunk, emb) in enumerate(zip(chunks, embeddings)):
+        st.session_state.vs_documents.append(chunk)
+        st.session_state.vs_embeddings.append(emb)
+        st.session_state.vs_metadatas.append({"source": filename, "chunk_index": i})
 
-    collection.add(
-        documents=chunks,
-        embeddings=embeddings,
-        ids=ids,
-        metadatas=metadatas,
-    )
     return len(chunks)
 
 
-def ask_question(question):
-    """
-    Query the vector store and generate an answer.
-    Returns (answer_text, source_documents_list).
-    """
+def search_vectors(query, top_k=5):
+    """Simple cosine similarity search using numpy."""
     embedder = st.session_state.embedder
-    collection = st.session_state.collection
+    if not st.session_state.vs_embeddings:
+        return [], [], []
+
+    q_emb = embedder.encode(query)
+    db_embs = np.array(st.session_state.vs_embeddings)
+    q_norm = q_emb / np.linalg.norm(q_emb)
+    db_norms = db_embs / np.linalg.norm(db_embs, axis=1, keepdims=True)
+    similarities = np.dot(db_norms, q_norm)
+
+    top_indices = np.argsort(similarities)[::-1][:top_k]
+
+    docs = [st.session_state.vs_documents[i] for i in top_indices]
+    metas = [st.session_state.vs_metadatas[i] for i in top_indices]
+    scores = [float(similarities[i]) for i in top_indices]
+
+    return docs, metas, scores
+
+
+def ask_question(question):
+    """Query the vector store and generate an answer."""
     client = st.session_state.llm_client
     top_k = st.session_state.top_k
     temperature = st.session_state.temperature
 
-    q_embedding = embedder.encode(question).tolist()
-
-    results = collection.query(
-        query_embeddings=[q_embedding],
-        n_results=top_k,
-    )
-
-    docs = results["documents"][0]
-    metadatas = results["metadatas"][0]
-    distances = results["distances"][0] if results.get("distances") else [0] * len(docs)
+    docs, metadatas, scores = search_vectors(question, top_k)
     context = "\n\n".join(docs)
 
     response = client.chat.completions.create(
@@ -325,11 +283,12 @@ def ask_question(question):
 
     sources = []
     for i, doc in enumerate(docs):
+        relevance = round(scores[i] * 100, 1)
         sources.append({
             "text": doc[:300] + ("..." if len(doc) > 300 else ""),
             "source": metadatas[i].get("source", "Unknown"),
             "chunk": metadatas[i].get("chunk_index", i),
-            "relevance": round((1 - distances[i] / 2) * 100, 1) if distances[i] else 0,
+            "relevance": relevance,
         })
 
     return answer, sources
@@ -341,9 +300,6 @@ def ask_question(question):
 if st.session_state.embedder is None:
     with st.spinner("Loading embedding model..."):
         st.session_state.embedder = load_embedder()
-
-if st.session_state.collection is None:
-    st.session_state.collection = get_chroma_collection()
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -360,7 +316,6 @@ with st.sidebar:
 
     st.divider()
 
-    # ── Vector Store Status ──
     st.markdown("##### 💾 Vector Store Status")
     is_ready = st.session_state.vector_store_ready
     dot_class = "status-online" if is_ready else "status-offline"
@@ -376,7 +331,6 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Indexed docs list ──
     if st.session_state.indexed_docs:
         st.markdown("**Indexed Documents:**")
         for doc in st.session_state.indexed_docs:
@@ -388,7 +342,6 @@ with st.sidebar:
 
     st.divider()
 
-    # ── Model Settings ──
     st.markdown("##### ⚙️ Model Settings")
     st.session_state.temperature = st.slider(
         "Temperature", 0.0, 1.0, st.session_state.temperature, 0.05,
@@ -409,8 +362,6 @@ with st.sidebar:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  MAIN PANEL
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-# ── Header ──
 st.markdown("""
 <div style="text-align:center; padding:1.5rem 0 1rem;">
     <h1 style="font-size:2rem; font-weight:700; margin:0;">
@@ -422,9 +373,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  SETUP PANEL (always visible on main page)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ── Setup Panel (visible on main page) ──
 setup_col1, setup_col2 = st.columns(2)
 
 with setup_col1:
@@ -487,10 +436,9 @@ st.markdown("<br>", unsafe_allow_html=True)
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"], avatar="👤" if msg["role"] == "user" else "🧠"):
         st.markdown(msg["content"])
-
         if msg["role"] == "assistant" and msg.get("sources"):
             with st.expander("📎 View Sources"):
-                for j, src in enumerate(msg["sources"]):
+                for src in msg["sources"]:
                     relevance = src.get("relevance", 0)
                     bar_color = "#50C878" if relevance > 70 else "#F0AD4E" if relevance > 40 else "#FF4D4D"
                     st.markdown(f"""
@@ -534,7 +482,7 @@ if prompt := st.chat_input("Ask a question about your documents..."):
 
         if sources:
             with st.expander("📎 View Sources"):
-                for j, src in enumerate(sources):
+                for src in sources:
                     relevance = src.get("relevance", 0)
                     bar_color = "#50C878" if relevance > 70 else "#F0AD4E" if relevance > 40 else "#FF4D4D"
                     st.markdown(f"""
